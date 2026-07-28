@@ -47,6 +47,8 @@ just captured earlier so you don't have to stand up seven containers to see the 
 
 Pre-generated output is in [`examples/`](examples/) if you'd rather just read it.
 
+**2-minute demo video:** <https://youtu.be/7CyvfJ9wuTo>
+
 ---
 
 ## What it actually does
