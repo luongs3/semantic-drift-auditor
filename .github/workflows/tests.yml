@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the test suite
+        run: make test
+
+      # Proves the committed fixture still drives the real code path. If the audit logic
+      # regresses, this step fails even though no DataHub is running in CI.
+      - name: Audit the recorded catalog
+        run: |
+          set +e
+          python src/cli.py audit --fixture fixtures/showcase-drift.json --out /tmp/report.md
+          status=$?
+          # exit 1 = drift found under live consumers, which is the expected result for
+          # this fixture. Anything else is a real failure.
+          if [ "$status" -ne 1 ]; then
+            echo "expected exit 1 (drift detected), got $status"
+            exit 1
+          fi
+          grep -q "MEANING CHANGED" /tmp/report.md
+
+      - name: Check the report is reproducible
+        run: |
+          python src/cli.py audit --fixture fixtures/showcase-drift.json --out /tmp/a.md || true
+          python src/cli.py audit --fixture fixtures/showcase-drift.json --out /tmp/b.md || true
+          diff /tmp/a.md /tmp/b.md

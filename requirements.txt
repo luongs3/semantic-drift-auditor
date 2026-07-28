@@ -1,0 +1,4 @@
+# semantic-drift-auditor talks to DataHub over plain HTTP with urllib from the standard
+# library, so the audit itself has no runtime dependencies at all. pytest is only needed
+# to run the test suite.
+pytest>=7.0
