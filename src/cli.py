@@ -21,7 +21,7 @@ from pathlib import Path
 from datahub_client import DataHubClient, DataHubError
 from drift import Severity, assess
 from fixtures import FixtureError, RecordingClient, ReplayClient
-from report import render_document, render_summary
+from report import render_document, render_summary, to_terminal
 
 # The definition edits `drift` applies to manufacture demo history.
 #
@@ -157,7 +157,12 @@ def cmd_audit(args) -> int:
     findings = audit_terms(source, urns, args.max_assets)
 
     report = render_summary(findings, scanned=len(urns))
-    print(report)
+    # Markdown is the storage format (file, PR comment, DataHub Document); a terminal
+    # gets the same report with the syntax turned into colour.
+    if args.markdown:
+        print(report)
+    else:
+        print(to_terminal(report, color=sys.stdout.isatty() and not args.no_color))
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -285,6 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--out", help="write the markdown report to this path")
     audit.add_argument("--json", help="write machine-readable findings to this path")
     audit.add_argument("--max-assets", type=int, default=100)
+    audit.add_argument("--markdown", action="store_true", help="print raw markdown instead of styled text")
+    audit.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     audit.set_defaults(func=cmd_audit)
 
     drift = add("drift", help="author a definition change (creates demo history)")

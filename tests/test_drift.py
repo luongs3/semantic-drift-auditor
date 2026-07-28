@@ -18,6 +18,7 @@ from drift import (  # noqa: E402
     Severity,
     classify_drift,
     diff_revisions,
+    normalise,
     split_core,
 )
 
@@ -153,3 +154,45 @@ def test_diff_reports_added_and_removed():
     diff = diff_revisions("One. Two.", "One. Three.", 1, 2)
     assert any("Two" in line for line in diff.removed)
     assert any("Three" in line for line in diff.added)
+
+
+# ------------------------------------------- issues found by vision-QA on demo frames
+
+def test_markdown_escapes_are_stripped():
+    """DataHub stores definitions with `\\-` and `\\_` baked in by ingestion. Left alone
+    they appear verbatim on the removed side but not the added side, so the same line
+    looks different before and after — which reads as a bug in the differ."""
+    assert normalise("\\- Single order: SUM(order\\_total)") == "- Single order: SUM(order_total)"
+    assert normalise("value\xa0with nbsp") == "value with nbsp"
+
+
+def test_escaped_and_unescaped_lines_compare_equal():
+    old = "Revenue.\n\\- Single order: use order\\_total"
+    new = "Revenue.\n- Single order: use order_total"
+    assert diff_revisions(old, new, 1, 2).is_empty
+
+
+def test_long_diffs_collapse_so_the_new_definition_stays_visible():
+    """14 near-identical SQL removals used to push the whole '+' side off screen."""
+    old = "Meaning.\n" + "\n".join(f"- example query number {i}." for i in range(14))
+    new = "New meaning.\n- one replacement example."
+    out = diff_revisions(old, new, 1, 2).unified(old, new)
+    assert "more lines" in out
+    assert len(out.splitlines()) <= 16
+    assert "+New meaning." in out  # the payoff survived the collapse
+
+
+def test_collapse_does_not_eat_the_file_headers():
+    """`--- v1 (older)` starts with the same characters as a removed bullet `-- item`."""
+    old = "Meaning.\n" + "\n".join(f"- item {i}." for i in range(14))
+    new = "Other meaning."
+    out = diff_revisions(old, new, 1, 2).unified(old, new)
+    lines = out.splitlines()
+    assert lines[0].startswith("--- v1")
+    assert lines[1].startswith("+++ v2")
+
+
+def test_short_diffs_are_not_collapsed():
+    old, new = "Value including tax.", "Value excluding tax."
+    out = diff_revisions(old, new, 1, 2).unified(old, new)
+    assert "more lines" not in out

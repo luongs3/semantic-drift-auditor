@@ -9,9 +9,11 @@ Two audiences, one analysis:
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from datetime import datetime, timezone
 
-from drift import DriftFinding, Severity
+from drift import DriftFinding, Severity, normalise
 
 _ICON = {
     Severity.BREAKING: "🔴",
@@ -33,7 +35,18 @@ def _when(timestamp: int) -> str:
 
 
 def _actor(actor: str) -> str:
-    """`urn:li:corpuser:jdoe` -> `jdoe`."""
+    """`urn:li:corpuser:jdoe` -> `` `jdoe` ``.
+
+    Backticked on purpose: DataHub's system actor is `__datahub_system`, and a bare
+    leading double underscore is parsed as emphasis the moment this report is posted to
+    a PR comment or Slack, mangling the name.
+    """
+    name = actor.rsplit(":", 1)[-1] if actor else "unknown"
+    return f"`{name}`"
+
+
+def _plain_actor(actor: str) -> str:
+    """Un-decorated actor name, for the plain-text Document written into DataHub."""
     return actor.rsplit(":", 1)[-1] if actor else "unknown"
 
 
@@ -59,7 +72,10 @@ def render_markdown(finding: DriftFinding) -> str:
 
     if finding.verdict.reasons:
         lines.append("**Why this classification:**\n")
-        lines.extend(f"- {r}\n" for r in finding.verdict.reasons)
+        lines.extend(f"- {r}\n" for r in finding.verdict.top_reasons())
+        extra = len(finding.verdict.reasons) - len(finding.verdict.top_reasons())
+        if extra > 0:
+            lines.append(f"- _(+{extra} related signal(s))_\n")
         lines.append("\n")
 
     if not finding.diff.is_empty:
@@ -110,7 +126,7 @@ def render_document(finding: DriftFinding) -> tuple[str, str]:
 
     body: list[str] = []
     body.append(
-        f"The glossary term '{finding.term_name}' was redefined by {_actor(finding.actor)} "
+        f"The glossary term '{finding.term_name}' was redefined by {_plain_actor(finding.actor)} "
         f"at {_when(finding.changed_at)}. semantic-drift-auditor classified this change as "
         f"{sev.value}.\n\n"
     )
@@ -145,7 +161,7 @@ def render_document(finding: DriftFinding) -> tuple[str, str]:
 
 
 def _truncate(text: str, limit: int = 1500) -> str:
-    text = (text or "").replace("\\_", "_").replace("\xa0", " ").strip()
+    text = normalise(text).strip()
     return text if len(text) <= limit else text[:limit] + " […]"
 
 
@@ -157,7 +173,8 @@ def render_summary(findings: list[DriftFinding], scanned: int) -> str:
     lines = ["# Semantic Drift Audit\n\n"]
     lines.append(
         f"Scanned **{scanned}** glossary term(s); **{len(findings)}** had revision history; "
-        f"**{len(breaking)}** changed meaning; **{len(alerting)}** of those have live consumers.\n\n"
+        f"**{len(breaking)}** changed meaning; **{len(alerting)}** of those "
+        f"{'has' if len(alerting) == 1 else 'have'} live consumers.\n\n"
     )
     if not findings:
         lines.append(
@@ -167,16 +184,116 @@ def render_summary(findings: list[DriftFinding], scanned: int) -> str:
         )
         return "".join(lines)
 
-    lines.append("| Term | Verdict | Dashboards | Charts | Alert |\n")
-    lines.append("|---|---|---|---|---|\n")
-    for f in sorted(findings, key=lambda x: (-x.verdict.severity.rank, x.term_name)):
-        lines.append(
-            f"| {f.term_name} | {_ICON[f.verdict.severity]} {f.verdict.severity.value} "
-            f"| {len(f.impact.dashboards)} | {len(f.impact.charts)} "
-            f"| {'YES' if f.should_alert else '—'} |\n"
-        )
+    ordered = sorted(findings, key=lambda x: (-x.verdict.severity.rank, x.term_name))
+
+    # Pad the columns so the table is readable as plain text in a terminal, not just
+    # after a markdown renderer gets to it.
+    headers = ["Term", "Verdict", "Dashboards", "Charts", "Alert"]
+    rows = [
+        [
+            f.term_name,
+            f"{_ICON[f.verdict.severity]} {f.verdict.severity.value}",
+            str(len(f.impact.dashboards)),
+            str(len(f.impact.charts)),
+            "YES" if f.should_alert else "—",
+        ]
+        for f in ordered
+    ]
+    widths = [
+        max(_display_width(h), *(_display_width(r[i]) for r in rows))
+        for i, h in enumerate(headers)
+    ]
+    lines.append(_row(headers, widths))
+    lines.append("|" + "|".join("-" * (w + 2) for w in widths) + "|\n")
+    for row in rows:
+        lines.append(_row(row, widths))
+
     lines.append("\n---\n\n")
-    for f in sorted(findings, key=lambda x: (-x.verdict.severity.rank, x.term_name)):
+    for f in ordered:
         lines.append(render_markdown(f))
         lines.append("\n---\n\n")
     return "".join(lines)
+
+
+def _display_width(text: str) -> int:
+    """Terminal cell width, not character count.
+
+    The severity icons are East-Asian-Wide and occupy two cells; the em-dash used for
+    "no alert" is Ambiguous and occupies one. Counting characters instead of cells puts
+    the pipes one column out on exactly the rows that carry an icon, which is what makes
+    a padded table still look crooked.
+    """
+    return sum(2 if unicodedata.east_asian_width(c) == "W" else 1 for c in text)
+
+
+def _row(cells: list[str], widths: list[int]) -> str:
+    padded = [c + " " * (w - _display_width(c)) for c, w in zip(cells, widths)]
+    return "| " + " | ".join(padded) + " |\n"
+
+
+# --------------------------------------------------------------------------- terminal
+
+_ANSI = {
+    "dim": "\033[2m",
+    "bold": "\033[1m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "cyan": "\033[36m",
+    "reset": "\033[0m",
+}
+
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+# Italics only when the underscores are at a word boundary. Without the guard this eats
+# the underscores out of identifiers like `__datahub_system` and `order_total`, which is
+# exactly the kind of quiet mangling this report exists to warn people about.
+_MD_ITALIC = re.compile(r"(?<![\w_])_([^_\n]+?)_(?![\w_])")
+_MD_CODE = re.compile(r"`([^`\n]+?)`")
+
+
+def to_terminal(markdown: str, color: bool = True) -> str:
+    """Render the markdown report for a terminal.
+
+    The report is markdown because it also lands in a file, a PR comment and a DataHub
+    Document. Dumping those markers verbatim to a TTY makes a working tool look like
+    unfinished output, so on the way to a terminal we drop the syntax and use colour for
+    the same emphasis: red for a removed line, green for an added one, bold for headings.
+    """
+    def paint(text: str, *styles: str) -> str:
+        if not color:
+            return text
+        return "".join(_ANSI[s] for s in styles) + text + _ANSI["reset"]
+
+    out: list[str] = []
+    in_code = False
+    for line in markdown.splitlines():
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+
+        if in_code:
+            if line.startswith("+"):
+                out.append(paint(line, "green"))
+            elif line.startswith("-"):
+                out.append(paint(line, "red"))
+            elif line.startswith("@@"):
+                out.append(paint(line, "cyan"))
+            else:
+                out.append(paint(line, "dim"))
+            continue
+
+        if line.startswith("#"):
+            out.append(paint(line.lstrip("# "), "bold"))
+            continue
+        if line.strip() == "---":
+            out.append(paint("─" * 78, "dim"))
+            continue
+
+        text = _MD_BOLD.sub(lambda m: paint(m.group(1), "bold"), line)
+        text = _MD_CODE.sub(lambda m: paint(m.group(1), "cyan"), text)
+        text = _MD_ITALIC.sub(lambda m: paint(m.group(1), "dim"), text)
+        if text.lstrip().startswith(">"):
+            text = paint(text, "yellow")
+        out.append(text)
+
+    return "\n".join(out) + "\n"

@@ -100,8 +100,15 @@ class DefinitionDiff:
     def is_empty(self) -> bool:
         return not self.added and not self.removed
 
-    def unified(self, old_text: str, new_text: str, context: int = 1) -> str:
-        return "\n".join(
+    def unified(self, old_text: str, new_text: str, context: int = 1, max_lines: int = 16) -> str:
+        """A unified diff, collapsed to fit on one screen.
+
+        A definition rewrite often deletes a dozen near-identical SQL example lines. Left
+        at full length the removals push the *new* definition off the bottom of the
+        terminal — and the new definition is the whole point. Runs of more than three
+        consecutive same-sign lines are summarised instead.
+        """
+        raw = list(
             difflib.unified_diff(
                 _sentences(old_text),
                 _sentences(new_text),
@@ -111,6 +118,36 @@ class DefinitionDiff:
                 n=context,
             )
         )
+        if len(raw) <= max_lines:
+            return "\n".join(raw)
+
+        # The file headers are the first two lines only. Testing with startswith("---")
+        # would also match a removed bullet line like "-- example query", because the
+        # diff marker and the bullet dash collide.
+        def is_header(position: int) -> bool:
+            return position < 2
+
+        out: list[str] = []
+        index = 0
+        while index < len(raw):
+            line = raw[index]
+            sign = line[:1]
+            if sign in "+-" and not is_header(index):
+                run = index
+                while run < len(raw) and raw[run][:1] == sign and not is_header(run):
+                    run += 1
+                length = run - index
+                if length > 3:
+                    out.extend(raw[index : index + 2])
+                    word = "removed" if sign == "-" else "added"
+                    # No +/- prefix: an elision marker carrying a diff sign reads as a
+                    # line whose *content* is "… 8 more lines", not as an annotation.
+                    out.append(f"  … {length - 2} more lines {word}")
+                    index = run
+                    continue
+            out.append(line)
+            index += 1
+        return "\n".join(out)
 
 
 @dataclass
@@ -123,6 +160,17 @@ class DriftVerdict:
     @property
     def is_breaking(self) -> bool:
         return self.severity is Severity.BREAKING
+
+    def top_reasons(self, limit: int = 3) -> list[str]:
+        """The most specific reasons, for display.
+
+        The signal list overlaps by design — a change from "including tax" to "net of
+        tax" legitimately trips inclusion, net/gross and monetary-component all at once.
+        Printing all five reads as the classifier dumping its rule table rather than
+        matching, so the report shows the top few. ``reasons`` keeps the full list for
+        anyone reading the JSON.
+        """
+        return self.reasons[:limit]
 
 
 @dataclass
@@ -164,6 +212,20 @@ class DriftFinding:
         return self.verdict.is_breaking and self.impact.consumer_count > 0
 
 
+def normalise(text: str) -> str:
+    """Undo the markdown escaping DataHub stores definitions with.
+
+    Definitions arrive with `\\-`, `\\_`, `\\[` and non-breaking spaces baked in by the
+    ingestion path. Left alone those escapes show up verbatim in the diff — and worse,
+    asymmetrically, because a definition *we* author has none. The same line then looks
+    different on the before and after sides, which reads as a bug in the differ.
+    """
+    if not text:
+        return ""
+    cleaned = text.replace("\xa0", " ")
+    return re.sub(r"\\([-_*\[\]()#.+!`])", r"\1", cleaned)
+
+
 def _sentences(text: str) -> list[str]:
     """Split a definition into comparable units.
 
@@ -173,8 +235,7 @@ def _sentences(text: str) -> list[str]:
     """
     if not text:
         return []
-    normalised = text.replace("\\_", "_").replace("\xa0", " ")
-    parts = re.split(r"(?<=[.:;])\s+|\n+", normalised)
+    parts = re.split(r"(?<=[.:;])\s+|\n+", normalise(text))
     return [p.strip() for p in parts if p.strip()]
 
 

@@ -156,3 +156,73 @@ def test_summary_ranks_breaking_above_clarifying():
     findings = [make_finding(Severity.CLARIFYING), make_finding(Severity.BREAKING)]
     out = render_summary(findings, scanned=2)
     assert out.index("BREAKING") < out.index("CLARIFYING")
+
+
+# --------------------------------------------- issues found by vision-QA on the frames
+
+def test_summary_table_columns_are_aligned():
+    """Unpadded pipes render as delimited soup in a terminal, not as a table.
+
+    Alignment is measured in terminal *cells*, not string indices: the severity icons
+    are double-width, so a row carrying one has its pipes at a lower character index
+    than a row without, while appearing in the same screen column.
+    """
+    import unicodedata
+
+    def cells(row: str) -> tuple[int, ...]:
+        out, width = [], 0
+        for ch in row:
+            if ch == "|":
+                out.append(width)
+            width += 2 if unicodedata.east_asian_width(ch) == "W" else 1
+        return tuple(out)
+
+    findings = [make_finding(Severity.BREAKING), make_finding(Severity.CLARIFYING)]
+    rows = [ln for ln in render_summary(findings, scanned=2).splitlines() if ln.startswith("|")]
+    assert len(rows) >= 4
+    positions = {cells(r) for r in rows}
+    assert len(positions) == 1, f"misaligned table rows: {positions}"
+
+
+def test_singular_verb_when_one_term_alerts():
+    out = render_summary([make_finding(Severity.BREAKING)], scanned=10)
+    assert "of those has live consumers" in out
+    assert "of those have live consumers" not in out
+
+
+def test_plural_verb_when_several_terms_alert():
+    findings = [make_finding(Severity.BREAKING), make_finding(Severity.BREAKING)]
+    assert "of those have live consumers" in render_summary(findings, scanned=10)
+
+
+def test_system_actor_is_escaped_for_markdown():
+    """`__datahub_system` unbackticked gets eaten as emphasis in a PR comment."""
+    finding = make_finding()
+    finding.actor = "urn:li:corpuser:__datahub_system"
+    assert "`__datahub_system`" in render_markdown(finding)
+
+
+def test_document_uses_the_plain_actor_name():
+    """The Document is plain text inside DataHub — backticks would be noise there."""
+    finding = make_finding()
+    finding.actor = "urn:li:corpuser:__datahub_system"
+    _, body = render_document(finding)
+    assert "by __datahub_system" in body
+    assert "`" not in body.split("PREVIOUS DEFINITION")[0]
+
+
+def test_report_shows_a_capped_reason_list():
+    """Printing every overlapping signal reads as a rule-dump, not a match."""
+    finding = make_finding()
+    finding.verdict.reasons = [f"reason {i}" for i in range(6)]
+    out = render_markdown(finding)
+    assert "reason 0" in out and "reason 2" in out
+    assert "reason 5" not in out
+    assert "+3 related signal(s)" in out
+
+
+def test_document_keeps_the_full_reason_list():
+    finding = make_finding()
+    finding.verdict.reasons = [f"reason {i}" for i in range(6)]
+    _, body = render_document(finding)
+    assert "reason 5" in body

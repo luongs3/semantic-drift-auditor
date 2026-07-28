@@ -69,30 +69,26 @@
         "the sum of all line item totals, net of discounts and refunds, EXCLUDING shipping and tax.",
         "Changed to align order-level revenue with the finance team's net revenue definition.",
         "Previously this figure was gross of shipping and tax.",
-        "- Single order:",
         "order_total - shipping_amount - tax_amount",
         "- Aggregate net revenue:",
         "SUM(order_total - shipping_amount - tax_amount)",
-        "- Average order value:",
         "AVG(order_total - shipping_amount - tax_amount)"
       ],
       "removed": [
         "The total monetary value of an order, including all line items, discounts, and applicable taxes.",
         "Calculated as the sum of all line item totals for a given order.",
-        "\\- Single order:",
         "Use column 'order_total' directly",
-        "\\- Aggregate total revenue:",
+        "- Aggregate total revenue:",
         "SUM(order_total)",
-        "\\- Average order value:",
         "AVG(order_total)",
-        "\\- Count orders:",
+        "- Count orders:",
         "COUNT(DISTINCT order_id)",
         "Example queries:",
-        "\\- Total revenue:",
+        "- Total revenue:",
         "SELECT SUM(order_total) FROM order_entry_db.analytics.order_details",
-        "\\- Average order value:",
+        "- Average order value:",
         "SELECT AVG(order_total) FROM order_entry_db.analytics.order_details",
-        "\\- Revenue by date:",
+        "- Revenue by date:",
         "SELECT order_date, SUM(order_total) FROM order_entry_db.analytics.order_details GROUP BY order_date"
       ]
     }
@@ -160,10 +156,10 @@
       ],
       "removed": [
         "SQL Calculation Patterns:",
-        "\\- Group by customer_class and aggregate order_total",
-        "\\- Formula:",
+        "- Group by customer_class and aggregate order_total",
+        "- Formula:",
         "SUM(order_total) GROUP BY customer_class",
-        "\\- Use column 'customer_class' for grouping and 'order_total' for aggregation",
+        "- Use column 'customer_class' for grouping and 'order_total' for aggregation",
         "Required SQL structure:",
         "SELECT",
         "customer_class,",
@@ -174,14 +170,14 @@
         "GROUP BY customer_class",
         "ORDER BY total_revenue DESC",
         "Common aggregations:",
-        "\\- Total revenue per class:",
+        "- Total revenue per class:",
         "SUM(order_total) GROUP BY customer_class",
-        "\\- Order count per class:",
+        "- Order count per class:",
         "COUNT(DISTINCT order_id) GROUP BY customer_class",
-        "\\- Average order value per class:",
+        "- Average order value per class:",
         "AVG(order_total) GROUP BY customer_class",
-        "\\- With date filter:",
-        "Add WHERE order_date >= \\[date\\] before GROUP BY"
+        "- With date filter:",
+        "Add WHERE order_date >= [date] before GROUP BY"
       ]
     }
   }
