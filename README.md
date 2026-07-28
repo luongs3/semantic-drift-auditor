@@ -43,7 +43,7 @@ of a live DataHub instance seeded with the official `showcase-ecommerce` datapac
 lineage, the glossary history and the 34-asset downstream graph are all real; they were
 just captured earlier so you don't have to stand up seven containers to see the tool work.
 
-`make test` runs 28 unit tests, also with no DataHub.
+`make test` runs 58 unit tests, also with no DataHub.
 
 Pre-generated output is in [`examples/`](examples/) if you'd rather just read it.
 

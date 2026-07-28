@@ -120,6 +120,16 @@ def write_back(client: DataHubClient, findings: list, dry_run: bool = False) -> 
             continue
 
         title, body = render_document(finding)
+        # Stamp authorship into the body. OSS has no service-principal for API writes —
+        # everything lands as `__datahub_system` — so without this a reader has no way
+        # to tell a machine-written incident from one someone typed into the UI.
+        signed = (
+            body
+            + "\n---\n"
+            + "Raised automatically by semantic-drift-auditor "
+            + "(github.com/luongs3/semantic-drift-auditor). "
+            + f"Source: glossary term {finding.term_urn}.\n"
+        )
         # The term itself plus the assets carrying it — those are the things a human
         # opens after reading the alert.
         targets = finding.impact.dataset_urns[:20]
@@ -131,18 +141,21 @@ def write_back(client: DataHubClient, findings: list, dry_run: bool = False) -> 
             written["tags"].append(f"(dry-run) tag semantic-drift -> {len(targets)} dataset(s)")
             continue
 
-        doc_urn = client.create_document(title, body, related)
+        doc_urn = client.create_document(title, signed, related)
         if doc_urn:
             written["documents"].append(doc_urn)
 
         if targets:
-            incident_urn = client.raise_incident(
-                targets,
-                f"Semantic drift: {finding.term_name} was redefined",
-                body,
-            )
-            if incident_urn:
-                written["incidents"].append(incident_urn)
+            incident_title = f"Semantic drift: {finding.term_name} was redefined"
+            # Idempotent: re-running the audit (or scheduling it nightly) must not stack
+            # identical incidents on the same dataset.
+            existing = client.open_incident_titled(targets[0], incident_title)
+            if existing:
+                written["incidents"].append(f"{existing} (already open, not duplicated)")
+            else:
+                incident_urn = client.raise_incident(targets, incident_title, signed)
+                if incident_urn:
+                    written["incidents"].append(incident_urn)
 
         # Tag the affected datasets so the drift is visible in the DataHub UI at a glance.
         for urn in targets:

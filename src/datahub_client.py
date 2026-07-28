@@ -443,6 +443,32 @@ class DataHubClient:
         )
         return data.get("createDocument", "")
 
+    def open_incident_titled(self, dataset_urn: str, title: str) -> str | None:
+        """An ACTIVE incident with this exact title on this dataset, if one exists.
+
+        Re-running the audit must not stack duplicate incidents on the same dataset —
+        a nightly job would bury the asset in identical alerts, and a reviewer reading
+        seven copies of one finding reasonably concludes the tool is broken.
+        """
+        data = self._post_graphql(
+            """
+            query openIncidents($urn: String!) {
+              dataset(urn: $urn) {
+                incidents(start: 0, count: 50) {
+                  incidents { urn title status { state } }
+                }
+              }
+            }
+            """,
+            {"urn": dataset_urn},
+        )
+        incidents = (((data.get("dataset") or {}).get("incidents") or {}).get("incidents")) or []
+        for incident in incidents:
+            state = (incident.get("status") or {}).get("state")
+            if incident.get("title") == title and state == "ACTIVE":
+                return incident.get("urn")
+        return None
+
     def raise_incident(self, urns: list[str], title: str, description: str) -> str:
         """Raise a DataHub incident. Verified working on OSS Core v1.5.0.6.
 
@@ -461,6 +487,18 @@ class DataHubClient:
             },
         )
         return data.get("raiseIncident", "")
+
+    def resolve_incident(self, incident_urn: str, message: str) -> bool:
+        """Close an incident this tool raised.
+
+        Note the input type is IncidentStatusInput, NOT UpdateIncidentStatusInput, and
+        the urn is a positional argument rather than part of the input object.
+        """
+        data = self._post_graphql(
+            "mutation upd($u: String!, $i: IncidentStatusInput!) { updateIncidentStatus(urn: $u, input: $i) }",
+            {"u": incident_urn, "i": {"state": "RESOLVED", "message": message[:500]}},
+        )
+        return bool(data.get("updateIncidentStatus"))
 
     def add_tag(self, urn: str, tag: str, description: str = "Applied by semantic-drift-auditor") -> bool:
         tag_urn = f"urn:li:tag:{tag}"
